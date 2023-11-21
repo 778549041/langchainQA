@@ -12,6 +12,13 @@ class MysqlHelper(object):
         'password': 'root',
         'db': 'qa_db',
         'charset': 'utf8'}
+    cgpt_conn_params = {
+        'host': '176.10.10.235',
+        'port': 3306,
+        'user': 'root',
+        'password': 'root',
+        'db': 'cgpt',
+        'charset': 'utf8'}
 
     # todo 类的构造函数，主要用于类的初始化
     def __init__(self, conn_params):

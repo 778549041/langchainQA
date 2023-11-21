@@ -11,6 +11,7 @@ from langchain.docstore.document import Document
 import os
 from utils import torch_gc
 from sql_tool import MysqlHelper
+from typing import List
 
 app = Flask(__name__)
 
@@ -19,10 +20,14 @@ def _embeddings_hash(self):
 
 HuggingFaceEmbeddings.__hash__ = _embeddings_hash
 
+# 语义相似度模型实例
 embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH,
                                                 model_kwargs={'device': EMBEDDING_DEVICE})
-
+# QA问答对数据库操作实例
 mysqlhelper = MysqlHelper(MysqlHelper.conn_params)
+
+# cgpt文章数据库操作实例
+cgptSqlHelper = MysqlHelper(MysqlHelper.cgpt_conn_params)
 
 vector_stores = {}
 
@@ -66,17 +71,23 @@ def initVecFromDB():
 @app.route("/saveQA", methods=["post"])
 def saveQA():
     try:
-        question = request.form.get("question")
-        answer = request.form.get("answer")
-        indexName = request.form.get("indexName")
+        return_dict= {'code': '0',"message":'success'}
+        body = request.get_json()
+        question = body.get("question")
+        answer = body.get("answer")
+        indexName = body.get("indexName")
         if not question or not answer or not indexName:
-            return "知识库添加错误，请确认知识库名字、问题、答案是否正确！"
+            return_dict['code'] = '-1'
+            return_dict['message'] = "知识库添加错误，请确认知识库名字、问题、答案是否正确！"
+            return jsonify(return_dict)
         # 将数据添加到数据库
         sql = "insert into qapair(question,answer,vecIndexName) values(%s,%s,%s)"
         params = (question,answer,indexName,)
         result = mysqlhelper.insert(sql,params)
         if result == 0:
-            return "问答数据添加失败"
+            return_dict['code'] = '-1'
+            return_dict['message'] = "问答数据添加失败"
+            return jsonify(return_dict)
         docs = [Document(page_content=question, metadata={"source": question + ":"  + answer})]
         # 判断内存中是否有indexName这个索引，如果有直接取出来用，没有的话则判断本地是否有这个索引，如果有直接取出来用，没有的话则新建一个
         if indexName in vector_stores:
@@ -90,22 +101,29 @@ def saveQA():
             vector_stores[indexName] = vector_store
         torch_gc()
         vector_store.save_local(VS_PATH, index_name=indexName)
-        return "问答数据添加成功"
+        return_dict['message'] = "问答数据添加成功"
+        return jsonify(return_dict)
     except Exception as e:
         logger.error(e)
-        return "问答数据添加失败" + e
+        return_dict['code'] = '-1'
+        return_dict['message'] = "问答数据删除失败" + e
+        return jsonify(return_dict)
     
 # 修改问答数据到对应的向量库索引中
 @app.route("/updateQA", methods=["post"])
 def updateQA():
     try:
-        qaId = request.form.get("qaId")
+        return_dict= {'code': '0',"message":'success'}
+        body = request.get_json()
+        qaId = body.get("qaId")
         # 根据qaId查询数据
         selsql = "select * from qapair where qaId = %s"
         selparams = (qaId,)
         result = mysqlhelper.get_one(selsql,selparams)
         if not result:
-            return "没有查到对应的问答数据"
+            return_dict['code'] = '-1'
+            return_dict['message'] = "没有查到对应的问答数据"
+            return jsonify(return_dict)
         question = result[1]
         answer = result[2]
         indexName = result[3]
@@ -113,8 +131,8 @@ def updateQA():
         source = question + ":"  + answer
         # 将数据更新到数据库
         updatesql = "update qapair set question = %s, answer = %s where qaId = %s"
-        newQuestion = request.form.get("newQuestion")
-        newAnswer = request.form.get("newAnswer")
+        newQuestion = body.get("newQuestion")
+        newAnswer = body.get("newAnswer")
         if not newQuestion:
             newQuestion = question
         if not newAnswer:
@@ -130,26 +148,35 @@ def updateQA():
             vector_store = load_vector_store(VS_PATH, embeddings, indexName)
             vector_stores[indexName] = vector_store
         else:
-            return "没有找到对应的向量库索引，请确认索引名称是否正确！"
+            return_dict['code'] = '-1'
+            return_dict['message'] = "没有找到对应的向量库索引，请确认索引名称是否正确！"
+            return jsonify(return_dict)
         vector_store.update_doc(source,docs)
         torch_gc()
         vector_store.save_local(VS_PATH, index_name=indexName)
-        return "问答数据更新成功"
+        return_dict['message'] = "问答数据更新成功"
+        return jsonify(return_dict)
     except Exception as e:
         logger.error(e)
-        return "问答数据更新失败" + e
+        return_dict['code'] = '-1'
+        return_dict['message'] = "问答数据删除失败" + e
+        return jsonify(return_dict)
 
 # 删除单条问答数据
 @app.route("/deleteQA", methods=["post"])
 def deleteQA():
     try:
-        qaId = request.form.get("qaId")
+        return_dict= {'code': '0',"message":'success'}
+        body = request.get_json()
+        qaId = body.get("qaId")
         # 根据qaId查询数据
         selsql = "select * from qapair where qaId = %s"
         selparams = (qaId,)
         result = mysqlhelper.get_one(selsql,selparams)
         if not result:
-            return "没有查到对应的问答数据"
+            return_dict['code'] = '-1'
+            return_dict['message'] = "没有查到对应的问答数据"
+            return jsonify(return_dict)
         question = result[1]
         answer = result[2]
         indexName = result[3]
@@ -158,7 +185,9 @@ def deleteQA():
         params = (qaId,)
         result = mysqlhelper.delete(delsql,params)
         if result == 0:
-            return "问答数据删除失败"
+            return_dict['code'] = '-1'
+            return_dict['message'] = "问答数据删除失败"
+            return jsonify(return_dict)
         # 删除向量库的数据
          # 判断内存中是否有indexName这个索引，如果有直接取出来用，没有的话则判断本地是否有这个索引，如果有直接取出来用，没有则提示没有找到对应的索引
         if indexName in vector_stores:
@@ -167,29 +196,39 @@ def deleteQA():
             vector_store = load_vector_store(VS_PATH, embeddings, indexName)
             vector_stores[indexName] = vector_store
         else:
-            return "没有找到对应的向量库索引，请确认索引名称是否正确！"
+            return_dict['code'] = '-1'
+            return_dict['message'] = "没有找到对应的向量库索引，请确认索引名称是否正确！"
+            return jsonify(return_dict)
         vector_store.delete_doc(question + ":"  + answer)
-        return "问答数据删除成功"
+        return_dict['message'] = "问答数据删除成功"
+        return jsonify(return_dict)
     except Exception as e:
         logger.error(e)
-        return "问答数据删除失败" + e
+        return_dict['code'] = '-1'
+        return_dict['message'] = "问答数据删除失败" + e
+        return jsonify(return_dict)
 
 # 根据问题查询推荐答案
 @app.route("/calculate_similarity", methods=["post"])
 def get_knowledge_based_answer():
-    query = request.form.get("query")
-    indexName = request.form.get("indexName")
+    return_dict= {'code': '0',"message":'success',  "data": {}}
+    body = request.get_json()
+    query = body.get("query")
+    indexName = body.get("indexName")
     if indexName in vector_stores:
         vector_store = vector_stores[indexName]
     elif os.path.isdir(VS_PATH) and os.path.isfile(VS_PATH + "/" + indexName + ".faiss"):
         vector_store = load_vector_store(VS_PATH, embeddings, indexName)
     else:
-        return "没有找到对应的向量库索引，请确认索引名称是否正确！"
+        return_dict['code'] = '-1'
+        return_dict['message'] = "没有找到对应的向量库索引，请确认索引名称是否正确！"
+        return jsonify(return_dict)
     vector_store.score_threshold = 500
     related_docs_with_score = vector_store.similarity_search_with_score(query, k=5)
     questions = [{"question":doc.page_content,"score":doc.metadata['score'],"answer":doc.metadata["source"].split(":")[1]} for doc in related_docs_with_score]
     torch_gc()
-    return jsonify(scores=questions)
+    return_dict['data'] = questions
+    return jsonify(return_dict)
 
 # 从数据库中读取所有的知识库，加载到内存中
 def init_all_vector_index():
